@@ -1,5 +1,5 @@
 # Sử dụng môi trường Java 17 (Nếu project của bạn dùng Java 21, hãy đổi số 17 thành 21)
-FROM eclipse-temurin:17-jdk-alpine
+FROM eclipse-temurin:25-jdk-alpine
 
 # Tạo thư mục làm việc bên trong máy chủ
 WORKDIR /app
