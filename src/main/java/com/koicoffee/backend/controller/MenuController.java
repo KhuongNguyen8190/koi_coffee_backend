@@ -14,7 +14,6 @@ import java.util.Optional;
 
 @RestController
 @RequestMapping("/api/menu") // Định tuyến gốc: http://localhost:8080/api/menu
-@CrossOrigin(origins = "http://localhost:5173")
 public class MenuController {
 
     @Autowired
