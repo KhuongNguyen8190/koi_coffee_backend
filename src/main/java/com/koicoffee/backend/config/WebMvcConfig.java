@@ -6,11 +6,10 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
-
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                // Điền chính xác các link Frontend trên mạng của bạn
+                // TUYỆT ĐỐI KHÔNG DÙNG "*"
                 .allowedOrigins(
                         "https://koi-coffee-frontend.vercel.app",
                         "https://koicoffee.id.vn",

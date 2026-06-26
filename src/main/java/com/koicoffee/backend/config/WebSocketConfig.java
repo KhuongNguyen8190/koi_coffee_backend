@@ -13,11 +13,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns(
-                        "https://koi-coffee-frontend.vercel.app",
-                        "https://koicoffee.id.vn",
-                        "https://www.koicoffee.id.vn"
-                )
+                .setAllowedOriginPatterns("*") // 🚀 CỰC KỲ QUAN TRỌNG: Cho phép Localhost và 192.168.1.4 gọi chéo nhau
                 .withSockJS();
     }
 
