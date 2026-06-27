@@ -13,6 +13,7 @@ import java.util.List;
 public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findAllByOrderByIdDesc();
     List<Order> findByCreatedAtAfterOrderByIdDesc(LocalDateTime createdAt);
+
     @Query("SELECT COALESCE(SUM(o.totalPrice - o.discount), 0) FROM Order o WHERE o.status = 'PAID' AND o.paymentMethod = :method AND o.paymentTime >= :startTime")
-    Integer calculateRevenueSince(@Param("method") String method, @Param("startTime") LocalDateTime startTime);
+    Long calculateRevenueSince(@Param("method") String method, @Param("startTime") LocalDateTime startTime);
 }

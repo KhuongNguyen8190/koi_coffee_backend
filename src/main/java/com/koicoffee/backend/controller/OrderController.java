@@ -49,6 +49,17 @@ public class OrderController {
         }
     }
 
+    private long parseLongSafe(Object value) {
+        if (value == null || String.valueOf(value).trim().isEmpty() || "null".equals(String.valueOf(value))) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
     @GetMapping
     public Map<String, Object> getAllOrders() {
         LocalDateTime sevenDaysAgo = LocalDateTime.now().minusDays(7);
@@ -73,8 +84,8 @@ public class OrderController {
         order.setCode("HD" + timeCode);
         order.setStaffName((String) payload.get("staffName"));
 
-        order.setTotalPrice(parseIntSafe(payload.get("totalPrice")));
-        order.setDiscount(parseIntSafe(payload.get("discount")));
+        order.setTotalPrice(parseLongSafe(payload.get("totalPrice")));
+        order.setDiscount(parseLongSafe(payload.get("discount")));
 
         order.setCreatedAt(LocalDateTime.now());
         order.setStatus("PENDING");
@@ -136,8 +147,8 @@ public class OrderController {
         orderDetailRepository.deleteAll(order.getOrderDetails());
         order.getOrderDetails().clear();
 
-        order.setTotalPrice(parseIntSafe(payload.get("totalPrice")));
-        order.setDiscount(parseIntSafe(payload.get("discount")));
+        order.setTotalPrice(parseLongSafe(payload.get("totalPrice")));
+        order.setDiscount(parseLongSafe(payload.get("discount")));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) payload.get("items");
@@ -265,12 +276,12 @@ public class OrderController {
         splitOrder.setPaymentTime(LocalDateTime.now());
         splitOrder.setParentOrderId(parentOrder.getId());
         splitOrder.setNote("Tách từ hóa đơn " + parentOrder.getCode());
-        splitOrder.setTotalPrice(0);
-        splitOrder.setDiscount(0);
+        splitOrder.setTotalPrice(0L);
+        splitOrder.setDiscount(0L);
 
         splitOrder = orderRepository.save(splitOrder);
 
-        int splitTotalPrice = 0;
+        long splitTotalPrice = 0;
 
         for (Map<String, Object> itemReq : splitItems) {
             Long productId = Long.valueOf(itemReq.get("productId").toString());
@@ -315,7 +326,7 @@ public class OrderController {
         splitOrder.setTotalPrice(splitTotalPrice);
         orderRepository.save(splitOrder);
 
-        int newParentTotal = parentOrder.getOrderDetails().stream()
+        long newParentTotal = parentOrder.getOrderDetails().stream()
                 .mapToInt(od -> od.getQuantity() * od.getPrice())
                 .sum();
 
@@ -348,7 +359,7 @@ public class OrderController {
         int totalTransfer = 0;
 
         for (Order o : shiftOrders) {
-            int finalPrice = Math.max(0, o.getTotalPrice() - (o.getDiscount() != null ? o.getDiscount() : 0));
+            long finalPrice = Math.max(0, o.getTotalPrice() - (o.getDiscount() != null ? o.getDiscount() : 0));
 
             if ("CASH".equalsIgnoreCase(o.getPaymentMethod())) {
                 totalCash += finalPrice;
