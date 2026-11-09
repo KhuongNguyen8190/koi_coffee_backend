@@ -6,7 +6,10 @@ import java.time.LocalDateTime;
 
 @Data
 @Entity
-@Table(name = "shifts")
+@Table(name = "shifts", indexes = {
+    @Index(name = "idx_shifts_status", columnList = "status"),
+    @Index(name = "idx_shifts_start_time", columnList = "start_time")
+})
 public class Shift {
 
     @Id

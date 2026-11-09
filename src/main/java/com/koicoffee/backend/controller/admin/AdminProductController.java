@@ -57,7 +57,8 @@ public class AdminProductController {
             int price = Integer.parseInt(payload.get("price").toString());
             String status = (String) payload.getOrDefault("status", "active");
             String sku = (String) payload.get("sku");
-            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString()) : null;
+            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString())
+                    : null;
 
             Product savedProduct = productService.createProduct(name, price, status, categoryId, sku);
 
@@ -85,7 +86,8 @@ public class AdminProductController {
             Integer price = payload.containsKey("price") ? Integer.parseInt(payload.get("price").toString()) : null;
             String status = payload.containsKey("status") ? (String) payload.get("status") : null;
             String sku = payload.containsKey("sku") ? (String) payload.get("sku") : null;
-            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString()) : null;
+            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString())
+                    : null;
 
             Product updated = productService.updateProduct(id, name, price, status, categoryId, sku);
 

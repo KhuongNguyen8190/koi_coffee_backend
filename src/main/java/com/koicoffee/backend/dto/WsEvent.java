@@ -46,3 +46,4 @@ public class WsEvent {
         return of(type, "USER", action, id, message, null);
     }
 }
+

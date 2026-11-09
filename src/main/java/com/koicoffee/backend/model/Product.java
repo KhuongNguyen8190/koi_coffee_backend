@@ -9,7 +9,10 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonIgnore; // THÊM IMPORT NÀY
 
 @Entity
-@Table(name = "products")
+@Table(name = "products", indexes = {
+    @Index(name = "idx_products_status", columnList = "status"),
+    @Index(name = "idx_products_category_id", columnList = "category_id")
+})
 @Getter // DÙNG GETTER/SETTER thay vì @Data để chống lỗi vòng lặp
 @Setter
 @NoArgsConstructor
