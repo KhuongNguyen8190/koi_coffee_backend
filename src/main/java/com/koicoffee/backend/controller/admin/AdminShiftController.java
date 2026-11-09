@@ -1,9 +1,13 @@
 package com.koicoffee.backend.controller.admin;
 
+import com.koicoffee.backend.dto.PageResponse;
 import com.koicoffee.backend.model.Shift;
 import com.koicoffee.backend.repository.ShiftRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -12,16 +16,24 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/shifts")
+@RequiredArgsConstructor
 public class AdminShiftController {
 
-    @Autowired
-    private ShiftRepository shiftRepository;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
+    private final ShiftRepository shiftRepository;
+    private final WsNotificationService wsNotificationService;
 
     @GetMapping
-    public Map<String, Object> getAllShifts() {
+    public Map<String, Object> getAllShifts(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+
+        if (page != null && size != null) {
+            int pageSize = Math.min(Math.max(size, 1), 100);
+            Page<Shift> shiftPage = shiftRepository.findAllByOrderByIdDesc(
+                    PageRequest.of(page, pageSize, Sort.by(Sort.Direction.DESC, "id")));
+            return PageResponse.of(shiftPage).toMap();
+        }
+
         List<Shift> shifts = shiftRepository.findAllByOrderByIdDesc();
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -37,7 +49,6 @@ public class AdminShiftController {
 
         existing.setStaffName(req.getStaffName());
 
-        // Cập nhật giờ mở ca và kết ca
         if (req.getStartTime() != null) {
             existing.setStartTime(req.getStartTime());
         }
@@ -45,22 +56,17 @@ public class AdminShiftController {
             existing.setEndTime(req.getEndTime());
         }
 
-        // Cập nhật các dòng tiền
         existing.setInitialCash(req.getInitialCash() != null ? req.getInitialCash() : 0);
         existing.setBatchCashRevenue(req.getBatchCashRevenue() != null ? req.getBatchCashRevenue() : 0);
         existing.setTransferRevenue(req.getTransferRevenue() != null ? req.getTransferRevenue() : 0);
 
-        // Tự động tính lại Tổng doanh thu = Tiền mặt + Chuyển khoản
         existing.setTotalRevenue(existing.getBatchCashRevenue() + existing.getTransferRevenue());
-
         existing.setActualCash(req.getActualCash() != null ? req.getActualCash() : 0);
         existing.setNote(req.getNote());
-
-        // Tính lại lệch két tự động
         existing.setVariance(existing.getActualCash() - (existing.getInitialCash() + existing.getTotalRevenue()));
 
         Shift saved = shiftRepository.save(existing);
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastShift("UPDATE", "Ca làm việc #" + id + " đã được cập nhật bởi Admin");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -73,7 +79,7 @@ public class AdminShiftController {
         shiftRepository.findById(id).orElseThrow(() -> new RuntimeException("Không tìm thấy ca làm việc này!"));
         shiftRepository.deleteById(id);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastShift("DELETE", "Ca làm việc #" + id + " đã bị xóa bởi Admin");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");

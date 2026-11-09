@@ -1,32 +1,45 @@
-package com.koicoffee.backend.controller;
+package com.koicoffee.backend.controller.admin;
 
+import com.koicoffee.backend.dto.PageResponse;
 import com.koicoffee.backend.model.User;
-import com.koicoffee.backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import com.koicoffee.backend.service.UserManagementService;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/users")
+@RequiredArgsConstructor
 public class AdminUserController {
 
-    @Autowired
-    private UserRepository userRepository;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
-
-    private BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final UserManagementService userManagementService;
+    private final WsNotificationService wsNotificationService;
 
     @GetMapping
-    public Map<String, Object> getAllUsers() {
-        List<User> users = userRepository.findAll();
+    public Map<String, Object> getAllUsers(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestParam(required = false) String role,
+            @RequestParam(required = false) String search) {
+
+        // Phân trang với LIMIT / OFFSET ở mức database
+        if (page != null && size != null) {
+            int pageSize = Math.min(Math.max(size, 1), 100);
+            Page<User> userPage = userManagementService.searchUsersPaged(
+                    role, search,
+                    PageRequest.of(page, pageSize, Sort.by(Sort.Direction.DESC, "createdAt")));
+            return PageResponse.of(userPage).toMap();
+        }
+
+        // Lấy từ Cache (Chỉ query DB lại khi có user thay đổi)
+        List<User> users = userManagementService.getAllUsersCached();
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         response.put("data", users);
@@ -35,17 +48,9 @@ public class AdminUserController {
 
     @PostMapping
     public Map<String, Object> createUser(@RequestBody User userReq) {
-        if (userRepository.existsByUsername(userReq.getUsername())) {
-            throw new RuntimeException("Tên đăng nhập đã tồn tại!");
-        }
+        User savedUser = userManagementService.createUser(userReq);
+        wsNotificationService.broadcastUser("CREATE", savedUser.getUsername(), "Nhân viên mới: " + savedUser.getUsername());
 
-        userReq.setCreatedAt(LocalDateTime.now());
-        if (userReq.getIsActive() == null) userReq.setIsActive(true);
-
-        userReq.setPassword(passwordEncoder.encode("12345")); // Mặc định 12345
-        User savedUser = userRepository.save(userReq);
-
-        messagingTemplate.convertAndSend("/topic/public", "USER_LIST_CHANGED");
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         response.put("data", savedUser);
@@ -54,20 +59,13 @@ public class AdminUserController {
 
     @PutMapping("/{id}")
     public Map<String, Object> updateUser(@PathVariable Long id, @RequestBody User userReq) {
-        User existingUser = userRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy tài khoản!"));
+        User updatedUser = userManagementService.updateUser(id, userReq);
 
-        // Cấm cập nhật Username và Cấm cập nhật Password ở API này
-        existingUser.setFullName(userReq.getFullName());
-        existingUser.setRole(userReq.getRole());
-        existingUser.setIsActive(userReq.getIsActive());
-
-        User updatedUser = userRepository.save(existingUser);
-
-        if (!updatedUser.getIsActive()) {
-            messagingTemplate.convertAndSend("/topic/public", "USER_LOCKED:" + updatedUser.getUsername());
+        if (Boolean.FALSE.equals(updatedUser.getIsActive())) {
+            wsNotificationService.broadcastUser("LOCK", updatedUser.getUsername(), "Tài khoản bị khóa: " + updatedUser.getUsername());
+        } else {
+            wsNotificationService.broadcastUser("UPDATE", updatedUser.getUsername(), "Tài khoản đã cập nhật: " + updatedUser.getUsername());
         }
-        messagingTemplate.convertAndSend("/topic/public", "USER_LIST_CHANGED");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -75,14 +73,11 @@ public class AdminUserController {
         return response;
     }
 
-    // 🚀 API MỚI: CHỈ LÀM NHIỆM VỤ RESET MẬT KHẨU VỀ 12345
     @PutMapping("/{id}/reset-password")
     public Map<String, Object> resetPassword(@PathVariable Long id) {
-        User existingUser = userRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy tài khoản!"));
-
-        existingUser.setPassword(passwordEncoder.encode("12345"));
-        userRepository.save(existingUser);
+        userManagementService.resetPassword(id, "12345");
+        User user = userManagementService.getUserById(id);
+        wsNotificationService.broadcastUser("UPDATE", user.getUsername(), "Mật khẩu đã được reset về 12345");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -92,11 +87,8 @@ public class AdminUserController {
 
     @DeleteMapping("/{id}")
     public Map<String, Object> deleteUser(@PathVariable Long id) {
-        User existingUser = userRepository.findById(id).orElseThrow(() -> new RuntimeException("Không tìm thấy tài khoản!"));
-        String deletedUsername = existingUser.getUsername();
-        userRepository.delete(existingUser);
-        messagingTemplate.convertAndSend("/topic/public", "USER_LOCKED:" + deletedUsername);
-        messagingTemplate.convertAndSend("/topic/public", "USER_LIST_CHANGED");
+        String deletedUsername = userManagementService.deleteUser(id);
+        wsNotificationService.broadcastUser("LOCK", deletedUsername, "Tài khoản đã bị xóa");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");

@@ -8,8 +8,11 @@ import com.koicoffee.backend.repository.CashRegisterRepository;
 import com.koicoffee.backend.repository.OrderDetailRepository;
 import com.koicoffee.backend.repository.OrderRepository;
 import com.koicoffee.backend.repository.ProductRepository;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -21,22 +24,14 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/orders")
+@RequiredArgsConstructor
 public class OrderController {
 
-    @Autowired
-    private OrderRepository orderRepository;
-
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private CashRegisterRepository cashRegisterRepository;
-
-    @Autowired
-    private OrderDetailRepository orderDetailRepository;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
+    private final OrderRepository orderRepository;
+    private final ProductRepository productRepository;
+    private final CashRegisterRepository cashRegisterRepository;
+    private final OrderDetailRepository orderDetailRepository;
+    private final WsNotificationService wsNotificationService;
 
     private int parseIntSafe(Object value) {
         if (value == null || String.valueOf(value).trim().isEmpty() || "null".equals(String.valueOf(value))) {
@@ -60,10 +55,30 @@ public class OrderController {
         }
     }
 
+    // 🚀 GET /api/orders: Phân trang & Giới hạn record từ Database chống Slow Query
     @GetMapping
-    public Map<String, Object> getAllOrders() {
-        LocalDateTime sevenDaysAgo = LocalDateTime.now().minusDays(7);
-        List<Order> orders = orderRepository.findByCreatedAtAfterOrderByIdDesc(sevenDaysAgo);
+    public Map<String, Object> getAllOrders(
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "50") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false, defaultValue = "7") int days) {
+
+        int pageSize = Math.min(Math.max(size, 1), 100);
+        int pageIndex = Math.max(page, 0);
+
+        PageRequest pageRequest = PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Direction.DESC, "id"));
+        Page<Order> orderPage;
+
+        if (search != null && !search.trim().isEmpty()) {
+            orderPage = orderRepository.searchOrders(status, search.trim(), pageRequest);
+        } else if (status != null && !status.trim().isEmpty()) {
+            LocalDateTime cutoffTime = LocalDateTime.now().minusDays(days);
+            orderPage = orderRepository.findByStatusAndCreatedAtAfter(status.trim(), cutoffTime, pageRequest);
+        } else {
+            LocalDateTime cutoffTime = LocalDateTime.now().minusDays(days);
+            orderPage = orderRepository.findByCreatedAtAfter(cutoffTime, pageRequest);
+        }
 
         LocalDateTime lastShiftEnd = cashRegisterRepository.findById(1L)
                 .map(CashRegister::getLastUpdated)
@@ -71,8 +86,18 @@ public class OrderController {
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
-        response.put("data", orders);
+        response.put("data", orderPage.getContent());
         response.put("lastShiftEnd", lastShiftEnd);
+
+        Map<String, Object> pagination = new HashMap<>();
+        pagination.put("page", orderPage.getNumber());
+        pagination.put("size", orderPage.getSize());
+        pagination.put("totalElements", orderPage.getTotalElements());
+        pagination.put("totalPages", orderPage.getTotalPages());
+        pagination.put("hasNext", orderPage.hasNext());
+        pagination.put("hasPrevious", orderPage.hasPrevious());
+        response.put("pagination", pagination);
+
         return response;
     }
 
@@ -104,19 +129,18 @@ public class OrderController {
             detail.setProduct(product);
             detail.setQuantity(parseIntSafe(itemData.get("quantity")));
             detail.setPrice(parseIntSafe(itemData.get("price")));
-            if (itemData.get("note") != null) {
-                detail.setNote(String.valueOf(itemData.get("note")));
-            }
+            detail.setNote(itemData.get("note") != null ? String.valueOf(itemData.get("note")) : null);
+
             orderDetailRepository.save(detail);
             order.getOrderDetails().add(detail);
         }
 
-        Order savedOrder = orderRepository.save(order);
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        // Bắn WebSocket thông báo đơn hàng mới
+        wsNotificationService.broadcastOrder("CREATED", order.getId(), "Đơn mới [" + order.getCode() + "] được tạo");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
-        response.put("data", savedOrder);
+        response.put("data", order);
         return response;
     }
 
@@ -131,7 +155,7 @@ public class OrderController {
         order.setPaymentTime(LocalDateTime.now());
         orderRepository.save(order);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("PAID", id, "Đơn [" + order.getCode() + "] đã thanh toán (" + method + ")");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -168,14 +192,12 @@ public class OrderController {
         }
 
         orderRepository.save(order);
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("UPDATED", id, "Đơn [" + order.getCode() + "] vừa cập nhật món");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
     }
-
-    // --- CÁC ENDPOINT THAO TÁC NHANH ---
 
     @PutMapping("/{id}/status")
     @Transactional
@@ -184,7 +206,7 @@ public class OrderController {
         order.setStatus(status);
         orderRepository.save(order);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("STATUS_CHANGED", id, "Đơn [" + order.getCode() + "] chuyển sang " + status);
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
@@ -197,7 +219,7 @@ public class OrderController {
         order.setPaymentMethod(method);
         orderRepository.save(order);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("METHOD_CHANGED", id, "Đơn [" + order.getCode() + "] đổi PT thanh toán: " + method);
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
@@ -210,13 +232,12 @@ public class OrderController {
         order.setStatus("CANCELLED");
         orderRepository.save(order);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("CANCELLED", id, "Đơn [" + order.getCode() + "] đã hủy bỏ");
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
     }
 
-    // API MỚI: KHÔI PHỤC ĐƠN HÀNG SAU KHI HỦY
     @PutMapping("/{id}/restore")
     @Transactional
     public Map<String, Object> restoreOrder(@PathVariable Long id) {
@@ -226,7 +247,7 @@ public class OrderController {
         order.setPaymentTime(null);
         orderRepository.save(order);
 
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("RESTORED", id, "Đơn [" + order.getCode() + "] đã được khôi phục");
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
@@ -239,7 +260,7 @@ public class OrderController {
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy đơn hàng"));
 
         orderRepository.delete(order);
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+        wsNotificationService.broadcastOrder("DELETED", id, "Đơn [" + order.getCode() + "] đã bị xóa");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
@@ -260,106 +281,87 @@ public class OrderController {
         int totalParentQty = parentOrder.getOrderDetails().stream().mapToInt(OrderDetail::getQuantity).sum();
         int totalSplitQty = splitItems.stream().mapToInt(item -> parseIntSafe(item.get("quantity"))).sum();
 
-        if (totalParentQty <= 1) throw new RuntimeException("Đơn hàng chỉ có 1 sản phẩm, không thể tách!");
-        if (totalSplitQty >= totalParentQty) throw new RuntimeException("Không thể tách toàn bộ đơn hàng!");
+        Order childOrder = new Order();
+        childOrder.setCode(parentOrder.getCode() + "-T" + System.currentTimeMillis() % 1000);
+        childOrder.setParentOrderId(parentOrder.getId());
+        childOrder.setStaffName(parentOrder.getStaffName());
+        childOrder.setCreatedAt(LocalDateTime.now());
+        childOrder.setStatus("PAID");
+        childOrder.setPaymentMethod(method);
+        childOrder.setPaymentTime(LocalDateTime.now());
+        childOrder.setTotalPrice(0L);
+        childOrder.setDiscount(0L);
 
-        long splitCount = orderRepository.findAll().stream()
-                .filter(o -> parentOrder.getId().equals(o.getParentOrderId()))
-                .count();
+        childOrder = orderRepository.save(childOrder);
 
-        Order splitOrder = new Order();
-        splitOrder.setCode(parentOrder.getCode() + "-T" + (splitCount + 1));
-        splitOrder.setStaffName(parentOrder.getStaffName());
-        splitOrder.setCreatedAt(LocalDateTime.now());
-        splitOrder.setStatus("PAID");
-        splitOrder.setPaymentMethod(method);
-        splitOrder.setPaymentTime(LocalDateTime.now());
-        splitOrder.setParentOrderId(parentOrder.getId());
-        splitOrder.setNote("Tách từ hóa đơn " + parentOrder.getCode());
-        splitOrder.setTotalPrice(0L);
-        splitOrder.setDiscount(0L);
+        long splitTotal = 0;
+        for (Map<String, Object> sItem : splitItems) {
+            Long prodId = Long.valueOf(sItem.get("id").toString());
+            int splitQty = parseIntSafe(sItem.get("quantity"));
+            int splitPrice = parseIntSafe(sItem.get("price"));
+            String note = sItem.get("note") != null ? String.valueOf(sItem.get("note")) : null;
 
-        splitOrder = orderRepository.save(splitOrder);
+            if (splitQty <= 0) continue;
 
-        long splitTotalPrice = 0;
+            Product product = productRepository.findById(prodId).orElseThrow();
+            OrderDetail cDetail = new OrderDetail();
+            cDetail.setOrder(childOrder);
+            cDetail.setProduct(product);
+            cDetail.setQuantity(splitQty);
+            cDetail.setPrice(splitPrice);
+            cDetail.setNote(note);
+            orderDetailRepository.save(cDetail);
+            childOrder.getOrderDetails().add(cDetail);
 
-        for (Map<String, Object> itemReq : splitItems) {
-            Long productId = Long.valueOf(itemReq.get("productId").toString());
-            int splitQty = parseIntSafe(itemReq.get("quantity"));
-            int price = parseIntSafe(itemReq.get("price"));
-            String reqNote = itemReq.get("note") != null ? String.valueOf(itemReq.get("note")) : null;
+            splitTotal += (long) splitPrice * splitQty;
 
-            OrderDetail parentDetail = parentOrder.getOrderDetails().stream()
-                    .filter(od -> od.getProduct().getId().equals(productId))
-                    .filter(od -> {
-                        String odNote = od.getNote();
-                        if (reqNote == null || reqNote.trim().isEmpty() || "null".equals(reqNote)) {
-                            return odNote == null || odNote.trim().isEmpty();
-                        }
-                        return reqNote.equals(odNote);
-                    })
-                    .findFirst()
-                    .orElseThrow(() -> new RuntimeException("Món ăn không tồn tại trong hóa đơn gốc"));
-
-            OrderDetail splitDetail = new OrderDetail();
-            splitDetail.setOrder(splitOrder);
-            splitDetail.setProduct(parentDetail.getProduct());
-            splitDetail.setQuantity(splitQty);
-            splitDetail.setPrice(price);
-            splitDetail.setNote(parentDetail.getNote());
-
-            orderDetailRepository.save(splitDetail);
-            splitOrder.getOrderDetails().add(splitDetail);
-
-            splitTotalPrice += (splitQty * price);
-
-            int remainingQty = parentDetail.getQuantity() - splitQty;
-            if (remainingQty <= 0) {
-                orderDetailRepository.delete(parentDetail);
-                parentOrder.getOrderDetails().remove(parentDetail);
-            } else {
-                parentDetail.setQuantity(remainingQty);
-                orderDetailRepository.save(parentDetail);
+            for (OrderDetail pDetail : parentOrder.getOrderDetails()) {
+                if (pDetail.getProduct().getId().equals(prodId)) {
+                    pDetail.setQuantity(pDetail.getQuantity() - splitQty);
+                    break;
+                }
             }
         }
 
-        splitOrder.setTotalPrice(splitTotalPrice);
-        orderRepository.save(splitOrder);
+        childOrder.setTotalPrice(splitTotal);
+        orderRepository.save(childOrder);
 
-        long newParentTotal = parentOrder.getOrderDetails().stream()
-                .mapToInt(od -> od.getQuantity() * od.getPrice())
-                .sum();
+        parentOrder.getOrderDetails().removeIf(d -> d.getQuantity() <= 0);
 
-        parentOrder.setTotalPrice(newParentTotal);
-
-        if (parentOrder.getDiscount() != null && parentOrder.getDiscount() > newParentTotal) {
-            parentOrder.setDiscount(newParentTotal);
+        if (parentOrder.getOrderDetails().isEmpty() || totalSplitQty >= totalParentQty) {
+            parentOrder.setStatus("PAID");
+            parentOrder.setPaymentMethod(method);
+            parentOrder.setPaymentTime(LocalDateTime.now());
+        } else {
+            long newParentTotal = 0;
+            for (OrderDetail d : parentOrder.getOrderDetails()) {
+                newParentTotal += (long) d.getPrice() * d.getQuantity();
+            }
+            parentOrder.setTotalPrice(newParentTotal);
         }
-
         orderRepository.save(parentOrder);
-        messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+
+        wsNotificationService.broadcastOrder("SPLIT", id, "Tách đơn [" + parentOrder.getCode() + "] thành công");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;
     }
 
+    // 🚀 TỐI ƯU getShiftSummary: Query thẳng từ SQL bằng Index thay vì load toàn bộ DB
     @GetMapping("/shift-summary")
     public Map<String, Object> getShiftSummary() {
         LocalDateTime lastShiftEnd = cashRegisterRepository.findById(1L)
                 .map(CashRegister::getLastUpdated)
                 .orElse(LocalDateTime.MIN);
 
-        List<Order> shiftOrders = orderRepository.findAll().stream()
-                .filter(o -> "PAID".equals(o.getStatus()))
-                .filter(o -> o.getPaymentTime() != null && o.getPaymentTime().isAfter(lastShiftEnd))
-                .toList();
+        List<Order> shiftOrders = orderRepository.findByStatusAndPaymentTimeAfter("PAID", lastShiftEnd);
 
-        int totalCash = 0;
-        int totalTransfer = 0;
+        long totalCash = 0;
+        long totalTransfer = 0;
 
         for (Order o : shiftOrders) {
-            long finalPrice = Math.max(0, o.getTotalPrice() - (o.getDiscount() != null ? o.getDiscount() : 0));
+            long finalPrice = Math.max(0, (o.getTotalPrice() != null ? o.getTotalPrice() : 0) - (o.getDiscount() != null ? o.getDiscount() : 0));
 
             if ("CASH".equalsIgnoreCase(o.getPaymentMethod())) {
                 totalCash += finalPrice;
@@ -389,7 +391,7 @@ public class OrderController {
         cashRegister.setLastUpdated(LocalDateTime.now());
 
         cashRegisterRepository.save(cashRegister);
-        messagingTemplate.convertAndSend("/topic/public", "SHIFT_CLOSED");
+        wsNotificationService.broadcastShift("CLOSE", "Đã chốt ca làm việc!");
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");

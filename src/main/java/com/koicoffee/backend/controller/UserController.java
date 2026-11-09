@@ -1,8 +1,9 @@
 package com.koicoffee.backend.controller;
 
 import com.koicoffee.backend.model.User;
-import com.koicoffee.backend.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import com.koicoffee.backend.service.UserManagementService;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -11,14 +12,15 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/users")
+@RequiredArgsConstructor
 public class UserController {
 
-    @Autowired
-    private UserRepository userRepository;
+    private final UserManagementService userManagementService;
+    private final WsNotificationService wsNotificationService;
 
     @GetMapping
     public Map<String, Object> getAllUsers() {
-        List<User> users = userRepository.findAll();
+        List<User> users = userManagementService.getAllUsersCached();
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         response.put("data", users);
@@ -27,10 +29,9 @@ public class UserController {
 
     @PostMapping
     public Map<String, Object> createUser(@RequestBody User user) {
-        // Mặc định tạo tài khoản nhân viên nếu không truyền
-        if (user.getRole() == null) user.setRole("STAFF");
+        User savedUser = userManagementService.createUser(user);
+        wsNotificationService.broadcastUser("CREATE", savedUser.getUsername(), "Đã tạo tài khoản: " + savedUser.getUsername());
 
-        User savedUser = userRepository.save(user);
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         response.put("data", savedUser);
@@ -39,24 +40,20 @@ public class UserController {
 
     @PutMapping("/{id}")
     public Map<String, Object> updateUser(@PathVariable Long id, @RequestBody User userDetails) {
-        User user = userRepository.findById(id).orElseThrow(() -> new RuntimeException("Tài khoản không tồn tại"));
+        User updated = userManagementService.updateUser(id, userDetails);
+        wsNotificationService.broadcastUser("UPDATE", updated.getUsername(), "Đã cập nhật tài khoản: " + updated.getUsername());
 
-        user.setUsername(userDetails.getUsername());
-        user.setFullName(userDetails.getFullName());
-        user.setRole(userDetails.getRole());
-        if (userDetails.getPassword() != null && !userDetails.getPassword().isEmpty()) {
-            user.setPassword(userDetails.getPassword());
-        }
-
-        userRepository.save(user);
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
+        response.put("data", updated);
         return response;
     }
 
     @DeleteMapping("/{id}")
     public Map<String, Object> deleteUser(@PathVariable Long id) {
-        userRepository.deleteById(id);
+        String deletedUsername = userManagementService.deleteUser(id);
+        wsNotificationService.broadcastUser("DELETE", deletedUsername, "Đã xóa tài khoản: " + deletedUsername);
+
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         return response;

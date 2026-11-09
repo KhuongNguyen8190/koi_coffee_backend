@@ -3,6 +3,8 @@ package com.koicoffee.backend.service;
 import com.koicoffee.backend.dto.ProfileUpdateRequest;
 import com.koicoffee.backend.model.User;
 import com.koicoffee.backend.repository.UserRepository;
+import com.koicoffee.backend.config.CacheConfig;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ public class UserService {
     // ==========================================================
     // 🚀 HÀM CẬP NHẬT THÔNG TIN CÁ NHÂN (PROFILE)
     // ==========================================================
+    @CacheEvict(value = CacheConfig.CACHE_USERS, allEntries = true)
     public void updateProfile(Long userId, ProfileUpdateRequest request) {
         // 1. Tìm người dùng trong Database (Sử dụng hàm findById có sẵn của JpaRepository)
         User user = userRepository.findById(userId)

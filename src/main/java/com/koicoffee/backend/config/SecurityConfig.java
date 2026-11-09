@@ -35,10 +35,17 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of(
+        configuration.setAllowedOriginPatterns(List.of(
+                "http://localhost:[*]",
+                "http://127.0.0.1:[*]",
+                "http://localhost:5173",
+                "http://localhost:3000",
+                "http://localhost:8080",
                 "https://koicoffeepos.vercel.app",
+                "https://*.vercel.app",
                 "https://koicoffee.id.vn",
-                "https://www.koicoffee.id.vn"
+                "https://www.koicoffee.id.vn",
+                "https://*koicoffee*"
         ));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));

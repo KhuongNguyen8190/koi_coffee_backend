@@ -1,12 +1,14 @@
 package com.koicoffee.backend.controller.admin;
 
-import com.koicoffee.backend.model.Category;
+import com.koicoffee.backend.dto.PageResponse;
 import com.koicoffee.backend.model.Product;
-import com.koicoffee.backend.repository.CategoryRepository;
-import com.koicoffee.backend.repository.ProductRepository;
 import com.koicoffee.backend.service.NotificationService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import com.koicoffee.backend.service.ProductService;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -15,25 +17,32 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/products")
+@RequiredArgsConstructor
 public class AdminProductController {
 
-    @Autowired
-    private ProductRepository productRepository;
-
-    @Autowired
-    private CategoryRepository categoryRepository;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
-
-    @Autowired
-    private NotificationService notificationService;
+    private final ProductService productService;
+    private final NotificationService notificationService;
+    private final WsNotificationService wsNotificationService;
 
     @GetMapping
-    public Map<String, Object> getAllProductsForAdmin() {
-        List<Product> products = productRepository.findAll();
-        products.sort((p1, p2) -> p2.getId().compareTo(p1.getId()));
+    public Map<String, Object> getAllProductsForAdmin(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) Long categoryId,
+            @RequestParam(required = false) String status) {
 
+        // Phân trang với LIMIT / OFFSET ở mức database
+        if (page != null && size != null) {
+            int pageSize = Math.min(Math.max(size, 1), 100);
+            Page<Product> productPage = productService.searchProductsPaged(
+                    status, categoryId, search,
+                    PageRequest.of(page, pageSize, Sort.by(Sort.Direction.DESC, "id")));
+            return PageResponse.of(productPage).toMap();
+        }
+
+        // Lấy tất cả từ cache (tránh scan lại bảng nếu data chưa đổi)
+        List<Product> products = productService.getAllProductsCached();
         Map<String, Object> response = new HashMap<>();
         response.put("status", "success");
         response.put("data", products);
@@ -44,29 +53,21 @@ public class AdminProductController {
     public Map<String, Object> createProduct(@RequestBody Map<String, Object> payload) {
         Map<String, Object> response = new HashMap<>();
         try {
-            Product product = new Product();
-            product.setName((String) payload.get("name"));
-            product.setPrice(Integer.parseInt(payload.get("price").toString()));
-            product.setStatus((String) payload.get("status"));
+            String name = (String) payload.get("name");
+            int price = Integer.parseInt(payload.get("price").toString());
+            String status = (String) payload.getOrDefault("status", "active");
+            String sku = (String) payload.get("sku");
+            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString()) : null;
 
-            Long categoryId = Long.valueOf(payload.get("categoryId").toString());
-            Category cat = categoryRepository.findById(categoryId)
-                    .orElseThrow(() -> new RuntimeException("Không tìm thấy danh mục!"));
-            product.setCategory(cat);
-
-            Product savedProduct = productRepository.save(product);
+            Product savedProduct = productService.createProduct(name, price, status, categoryId, sku);
 
             String message = "🆕 Món mới [" + savedProduct.getName() + "] vừa được Admin thêm vào thực đơn!";
             notificationService.createNotification(message, null);
-
-            // 🚀 Bắn thông báo lên Frontend
-            messagingTemplate.convertAndSend("/topic/public", "MENU_NOTIFY:" + message);
-            messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+            wsNotificationService.broadcastMenu("PRODUCT_CREATED", savedProduct.getId(), message);
 
             response.put("status", "success");
             response.put("data", savedProduct);
         } catch (Exception e) {
-            e.printStackTrace();
             response.put("status", "error");
             response.put("message", e.getMessage());
         }
@@ -77,41 +78,33 @@ public class AdminProductController {
     public Map<String, Object> updateProduct(@PathVariable Long id, @RequestBody Map<String, Object> payload) {
         Map<String, Object> response = new HashMap<>();
         try {
-            Product product = productRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Sản phẩm không tồn tại"));
+            Product oldProduct = productService.getProductById(id);
+            String oldStatus = oldProduct.getStatus();
 
-            String oldStatus = product.getStatus();
+            String name = payload.containsKey("name") ? (String) payload.get("name") : null;
+            Integer price = payload.containsKey("price") ? Integer.parseInt(payload.get("price").toString()) : null;
+            String status = payload.containsKey("status") ? (String) payload.get("status") : null;
+            String sku = payload.containsKey("sku") ? (String) payload.get("sku") : null;
+            Long categoryId = payload.get("categoryId") != null ? Long.valueOf(payload.get("categoryId").toString()) : null;
 
-            if (payload.containsKey("name")) product.setName((String) payload.get("name"));
-            if (payload.containsKey("price")) product.setPrice(Integer.parseInt(payload.get("price").toString()));
-            if (payload.containsKey("status")) product.setStatus((String) payload.get("status"));
+            Product updated = productService.updateProduct(id, name, price, status, categoryId, sku);
 
-            Long categoryId = Long.valueOf(payload.get("categoryId").toString());
-            Category cat = categoryRepository.findById(categoryId)
-                    .orElseThrow(() -> new RuntimeException("Không tìm thấy danh mục!"));
-            product.setCategory(cat);
-
-            productRepository.save(product);
-
-            String newStatus = product.getStatus();
+            String newStatus = updated.getStatus();
             String message;
 
             if (oldStatus != null && newStatus != null && !oldStatus.equalsIgnoreCase(newStatus)) {
                 String statusVN = newStatus.equalsIgnoreCase("INACTIVE") ? "HẾT HÀNG" : "ĐANG BÁN";
-                message = "🍔 Món [" + product.getName() + "] vừa được Admin chuyển trạng thái thành: " + statusVN;
+                message = "🍔 Món [" + updated.getName() + "] vừa được Admin chuyển trạng thái thành: " + statusVN;
             } else {
-                message = "📝 Món [" + product.getName() + "] vừa được Admin cập nhật thông tin!";
+                message = "📝 Món [" + updated.getName() + "] vừa được Admin cập nhật thông tin!";
             }
 
             notificationService.createNotification(message, null);
-
-            // 🚀 Bắn thông báo lên Frontend
-            messagingTemplate.convertAndSend("/topic/public", "MENU_NOTIFY:" + message);
-            messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+            wsNotificationService.broadcastMenu("PRODUCT_UPDATED", id, message);
 
             response.put("status", "success");
+            response.put("data", updated);
         } catch (Exception e) {
-            e.printStackTrace();
             response.put("status", "error");
             response.put("message", e.getMessage());
         }
@@ -122,18 +115,14 @@ public class AdminProductController {
     public Map<String, Object> deleteProduct(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
         try {
-            Product product = productRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Sản phẩm không tồn tại"));
+            Product product = productService.getProductById(id);
             String productName = product.getName();
 
-            productRepository.deleteById(id);
+            productService.deleteProduct(id);
 
             String message = "🗑️ Món [" + productName + "] vừa bị Admin xóa khỏi hệ thống!";
             notificationService.createNotification(message, null);
-
-            // 🚀 Bắn thông báo lên Frontend
-            messagingTemplate.convertAndSend("/topic/public", "MENU_NOTIFY:" + message);
-            messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+            wsNotificationService.broadcastMenu("PRODUCT_DELETED", id, message);
 
             response.put("status", "success");
         } catch (Exception e) {

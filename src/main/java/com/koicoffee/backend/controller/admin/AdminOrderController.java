@@ -1,38 +1,49 @@
 package com.koicoffee.backend.controller.admin;
 
+import com.koicoffee.backend.dto.PageResponse;
 import com.koicoffee.backend.model.Order;
 import com.koicoffee.backend.repository.OrderRepository;
 import com.koicoffee.backend.service.NotificationService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import com.koicoffee.backend.service.WsNotificationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/orders")
+@RequiredArgsConstructor
 public class AdminOrderController {
 
-    @Autowired
-    private OrderRepository orderRepository;
+    private final OrderRepository orderRepository;
+    private final NotificationService notificationService;
+    private final WsNotificationService wsNotificationService;
 
-    @Autowired
-    private NotificationService notificationService;
-
-    @Autowired
-    private SimpMessagingTemplate messagingTemplate;
-
+    // 🚀 Lấy danh sách hóa đơn Admin: Phân trang & Giới hạn từ SQL trực tiếp, chống Slow Query
     @GetMapping
-    public Map<String, Object> getAllOrders() {
-        List<Order> orders = orderRepository.findAll();
-        orders.sort((o1, o2) -> o2.getId().compareTo(o1.getId()));
+    public Map<String, Object> getAllOrders(
+            @RequestParam(required = false, defaultValue = "0") int page,
+            @RequestParam(required = false, defaultValue = "20") int size,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search) {
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("status", "success");
-        response.put("data", orders);
-        return response;
+        int pageSize = Math.min(Math.max(size, 1), 100);
+        int pageIndex = Math.max(page, 0);
+
+        PageRequest pageRequest = PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Direction.DESC, "id"));
+        Page<Order> orderPage;
+
+        if ((search != null && !search.trim().isEmpty()) || (status != null && !status.trim().isEmpty())) {
+            orderPage = orderRepository.searchOrders(status, search != null ? search.trim() : null, pageRequest);
+        } else {
+            orderPage = orderRepository.findAll(pageRequest);
+        }
+
+        return PageResponse.of(orderPage).toMap();
     }
 
     @PutMapping("/{id}")
@@ -65,14 +76,13 @@ public class AdminOrderController {
 
                 String message = "🧾 Hóa đơn [" + order.getCode() + "] vừa được Admin chuyển trạng thái thành: " + statusVN;
                 notificationService.createNotification(message, null);
+                wsNotificationService.broadcastOrder("STATUS_CHANGED", id, message);
+            } else {
+                wsNotificationService.broadcastOrder("UPDATED", id, "Hóa đơn [" + order.getCode() + "] vừa được cập nhật");
             }
-
-            // 🚀 Bắn WebSocket
-            messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
 
             response.put("status", "success");
         } catch (Exception e) {
-            e.printStackTrace();
             response.put("status", "error");
             response.put("message", e.getMessage());
         }
@@ -83,25 +93,20 @@ public class AdminOrderController {
     public Map<String, Object> deleteOrder(@PathVariable Long id) {
         Map<String, Object> response = new HashMap<>();
         try {
-            // Lấy thông tin hóa đơn trước khi xóa
             Order order = orderRepository.findById(id)
                     .orElseThrow(() -> new RuntimeException("Không tìm thấy hóa đơn"));
             String orderCode = order.getCode();
 
-            // Thực hiện xóa
             orderRepository.deleteById(id);
 
-            // 🚀 Bổ sung thêm thông báo khi XÓA hóa đơn (Phần mà lúc trước bị thiếu)
             String message = "🗑️ Hóa đơn [" + orderCode + "] vừa bị Admin xóa khỏi hệ thống!";
             notificationService.createNotification(message, null);
-
-            // 🚀 Bắn WebSocket
-            messagingTemplate.convertAndSend("/topic/public", "DATA_CHANGED");
+            wsNotificationService.broadcastOrder("DELETED", id, message);
 
             response.put("status", "success");
         } catch (Exception e) {
             response.put("status", "error");
-            response.put("message", "Không thể xóa hóa đơn này do ràng buộc dữ liệu!");
+            response.put("message", e.getMessage());
         }
         return response;
     }
