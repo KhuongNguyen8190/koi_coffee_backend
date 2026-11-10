@@ -14,12 +14,13 @@ import java.util.Optional;
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByUsername(String username);
+
     boolean existsByUsername(String username);
 
     List<User> findAllByOrderByCreatedAtDesc();
 
     @Query("SELECT u FROM User u WHERE " +
-           "(:role IS NULL OR :role = '' OR u.role = :role) AND " +
-           "(:search IS NULL OR :search = '' OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :search, '%')) OR LOWER(u.username) LIKE LOWER(CONCAT('%', :search, '%')))")
+            "(:role IS NULL OR :role = '' OR u.role = :role) AND " +
+            "(:search IS NULL OR :search = '' OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :search, '%')) OR LOWER(u.username) LIKE LOWER(CONCAT('%', :search, '%')))")
     Page<User> searchUsers(@Param("role") String role, @Param("search") String search, Pageable pageable);
 }

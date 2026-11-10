@@ -23,7 +23,8 @@ public class UserService {
     // ==========================================================
     @CacheEvict(value = CacheConfig.CACHE_USERS, allEntries = true)
     public void updateProfile(Long userId, ProfileUpdateRequest request) {
-        // 1. Tìm người dùng trong Database (Sử dụng hàm findById có sẵn của JpaRepository)
+        // 1. Tìm người dùng trong Database (Sử dụng hàm findById có sẵn của
+        // JpaRepository)
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy tài khoản người dùng!"));
 
