@@ -385,11 +385,13 @@ public class OrderController {
     @Transactional
     public Map<String, Object> closeShift(@RequestBody(required = false) Map<String, Object> payload) {
         CashRegister cashRegister = cashRegisterRepository.findById(1L)
-                .orElse(new CashRegister());
+                .orElseGet(() -> {
+                    CashRegister cr = new CashRegister();
+                    cr.setBalance(0L);
+                    return cr;
+                });
 
-        cashRegister.setId(1L);
         cashRegister.setLastUpdated(LocalDateTime.now());
-
         cashRegisterRepository.save(cashRegister);
         wsNotificationService.broadcastShift("CLOSE", "Đã chốt ca làm việc!");
 

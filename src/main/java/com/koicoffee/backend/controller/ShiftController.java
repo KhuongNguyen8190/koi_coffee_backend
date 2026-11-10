@@ -122,8 +122,11 @@ public class ShiftController {
 
         Shift savedShift = shiftRepository.save(shift);
 
-        CashRegister register = cashRegisterRepository.findById(1L).orElse(new CashRegister());
-        register.setId(1L);
+        CashRegister register = cashRegisterRepository.findById(1L).orElseGet(() -> {
+            CashRegister cr = new CashRegister();
+            cr.setBalance(0L);
+            return cr;
+        });
         register.setBalance(actualCashInput);
         register.setLastUpdated(now);
         cashRegisterRepository.save(register);
