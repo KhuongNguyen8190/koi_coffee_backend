@@ -23,10 +23,7 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
-                        // Cấu hình rõ ràng: Luôn luôn mở khóa cho API Ping giữ Server thức
                         .requestMatchers("/api/system/ping").permitAll()
-
-                        // Các API còn lại hiện tại vẫn đang mở tự do
                         .anyRequest().permitAll()
                 );
         return http.build();
@@ -35,20 +32,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of(
-                "http://localhost:[*]",
-                "http://127.0.0.1:[*]",
-                "http://localhost:5173",
-                "http://localhost:3000",
-                "http://localhost:8080",
-                "https://koicoffeepos.vercel.app",
-                "https://*.vercel.app",
-                "https://koicoffee.id.vn",
-                "https://www.koicoffee.id.vn",
-                "https://*koicoffee*"
-        ));
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        // Cho phép toàn bộ Origin bao gồm Vercel, Localhost, Custom Domain
+        configuration.setAllowedOriginPatterns(List.of("*"));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"));
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
@@ -56,7 +44,6 @@ public class SecurityConfig {
         return source;
     }
 
-    // ĐÂY LÀ HÀM QUAN TRỌNG ĐỂ FIX LỖI CRASH APP
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
