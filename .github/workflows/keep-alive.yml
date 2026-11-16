@@ -1,0 +1,16 @@
+name: Keep Render Backend Awake
+
+on:
+  schedule:
+    # Ping mỗi 10 phút để giữ Render Free Tier không bị sleep sau 15 phút không có request
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Koi Coffee Backend
+        run: |
+          echo "Pinging Render backend..."
+          curl -fsS --max-time 45 "https://koi-coffee-backend-x56d.onrender.com/api/system/ping" || echo "Ping attempted (may be waking up)"
